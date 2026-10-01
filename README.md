@@ -24,3 +24,7 @@ open questions are in [`architecture.md`](architecture.md).
   of one Oblastní spolek („Evidence členů“).
 - [MedCover](https://github.com/spidermila/MedCover) – event medical cover
   staffing, built by the same team.
+
+## Licence
+
+MIT. See [`LICENSE`](LICENSE).
