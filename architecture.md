@@ -116,6 +116,9 @@ administration of national-level users and of the certificate catalogue.
 | NFR-18 | Cost / budget | Running cost of the same order as one MemberBase deployment; no paid extras without an AD. | Must | Stakeholder | |
 | NFR-19 | Constraint (hosting) | Hosted on Microsoft Azure. | Must | Stakeholder | Reason: budget. Which Azure services: AD. |
 | NFR-20 | Data retention | Audit records (metadata, no payloads) are kept for the same period as MemberBase's change log: 10 years. | Must | Stakeholder | Answer payloads: FR-14. |
+| NFR-22 | Security | Participant keys and CrossCentral's signing keys rotate regularly and automatically, invisibly to users; administrators act only when a rotation fails. | Should | Stakeholder | AD-26, AD-27 |
+| NFR-23 | Security | Personal data in protocol messages is encrypted end to end between participants with strong, current algorithms, not only in transit to the receiver's entry point. | Must | Stakeholder | AD-24, AD-25 |
+| NFR-24 | Reliability | The protocol tolerates interrupted connections, slow or failing participants and restores from backup: no message is lost or applied twice, and delivery resumes without people. | Must | Stakeholder | AD-29 to AD-34 |
 | NFR-21 | Other constraints (timeline) | No fixed delivery date; work proceeds at the team's pace. | Not applicable | Stakeholder | Recorded so the category is covered. |
 
 ## 3. Baseline architecture
@@ -463,7 +466,7 @@ Architect's recommendation and not a decision.
 
 AD-24 to AD-34 refine the federation protocol decided in AD-03, AD-06,
 AD-14 and AD-15. They answer three Stakeholder requirements raised after
-the first review: strong, end-to-end protection of the payload; keys that
+the first review (NFR-22 to NFR-24): strong, end-to-end protection of the payload; keys that
 rotate regularly and automatically, with administrators involved only when
 something fails; and robustness against interrupted communication, slow or
 failing applications and restores from backup. Each has its options in the
@@ -895,7 +898,7 @@ hold whichever options are chosen are in section 15.2.
 | Status | Draft |
 | Issue or problem statement | TLS protects a message only up to the receiver's entry point, where TLS ends. Behind it, requests and answers with personal data are plaintext inside the hosting platform, in the outbox and inbox, and in any log line that slips. Are messages encrypted end to end between participants? (NFR-07, P-03) |
 | Assumptions | A-01 |
-| Motivation | Stakeholder requirement: security is the most important factor and encryption must be strong. Answers carry contact data of many members between separate legal entities. |
+| Motivation | Stakeholder requirement (NFR-23): security is the most important factor and encryption must be strong. Answers carry contact data of many members between separate legal entities. |
 | Options | **Option 1: TLS only; messages signed (AD-03 as decided).** Pros: least code. Cons: the payload is readable wherever TLS ends and at rest in outbox and inbox. <br> **Option 2: TLS plus mutual TLS.** Pros: the platform rejects unauthenticated callers before the application runs. Cons: no confidentiality beyond Option 1; needs a certificate authority (rejected in AD-03) and client certificates on ~70 deployments. <br> **Option 3: Sign, then encrypt to the receiver's public encryption key (JOSE: a JWS nested in a JWE), over TLS.** Pros: end to end between the applications; outbox and inbox hold ciphertext; the inner signature stays as proof of origin for the audit; mature open-source libraries. Cons: a second key per participant; more failure modes (receiver's key rotated or unknown). <br> **Option 4: As Option 3, with HPKE (RFC 9180) instead of JWE.** Pros: modern, simple construction. Cons: no standard JSON envelope; less mature Python support *(verify)*; more own code. <br> Details and interaction diagrams: [federation-protocol-options.md](federation-protocol-options.md#ad-24-confidentiality-of-protocol-messages). |
 | Decision | Open; leaning: Option 3. |
 | Justification | Leaning: the only option that protects the payload end to end with standard, mature tooling (P-03, NFR-07). |
@@ -913,7 +916,7 @@ hold whichever options are chosen are in section 15.2.
 | Status | Draft |
 | Issue or problem statement | Which algorithms sign and encrypt protocol messages, and where does each participant keep its private keys? (NFR-06, NFR-07, AD-19) |
 | Assumptions | Every MemberBase deployment can use a key vault of its own with a managed identity (open: I-12). |
-| Motivation | Stakeholder requirement: strong cryptography and automatic rotation. Where the key lives decides whether a compromised application can copy it, and how much rotation code is needed. The managed key vault supports RSA and the NIST elliptic curves, not Ed25519 or X25519. |
+| Motivation | Stakeholder requirement (NFR-22, NFR-23): strong cryptography and automatic rotation. Where the key lives decides whether a compromised application can copy it, and how much rotation code is needed. The managed key vault supports RSA and the NIST elliptic curves, not Ed25519 or X25519. |
 | Options | **Option 1: Ed25519 signatures and X25519 key agreement (JWE `ECDH-ES+A256KW` with `A256GCM`); keys generated by the application and stored as key vault secrets.** Pros: best modern algorithms; any library; no vault call per message. Cons: the private key is in application memory, so a compromised application can copy it; rotation is our own code. <br> **Option 2: ES384 signatures and RSA-OAEP-256 key wrapping (`A256GCM` content); non-exportable key vault keys; signing and unwrapping happen inside the vault.** Pros: the private key cannot be copied; the vault's rotation policy creates new key versions by itself; access is revoked by removing the managed identity's permission. Cons: older, still strong algorithms; one vault call per signed or received message; every deployment needs a vault (I-12); larger keys and messages. <br> **Option 3: Two tiers: a long-lived identity key per participant as a non-exportable vault key (ES384), which certifies short-lived Ed25519 and X25519 operational keys held by the application.** Pros: the identity key cannot be copied; a stolen operational key lives only days; operational rotation needs nobody. Cons: most code; receivers check a chain on every message; still a vault per deployment. <br> Details and interaction diagrams: [federation-protocol-options.md](federation-protocol-options.md#ad-25-algorithms-and-storage-of-participant-keys). |
 | Decision | Open; leaning: Option 2 if I-12 confirms a vault for every deployment, otherwise Option 1. |
 | Justification | Leaning: Option 2 meets "cannot be copied" and "rotates by itself" with the least code (P-03, P-06). |
@@ -931,7 +934,7 @@ hold whichever options are chosen are in section 15.2.
 | Status | Draft |
 | Issue or problem statement | How are participant keys replaced regularly, without people, and without breaking messages in flight or participants that were offline? (NFR-06) |
 | Assumptions | — |
-| Motivation | Stakeholder requirement: keys rotate regularly, fully automatically and invisibly to users; administrators act only when something fails. AD-19 left rotation to documented manual procedures, which across ~70 deployments do not happen in practice. |
+| Motivation | Stakeholder requirement (NFR-22): keys rotate regularly, fully automatically and invisibly to users; administrators act only when something fails. AD-19 left rotation to documented manual procedures, which across ~70 deployments do not happen in practice. |
 | Options | **Option 1: Manual rotation by administrators following a procedure.** Pros: no code. Cons: fails the Stakeholder requirement; ~70 people involved; usually skipped. <br> **Option 2: Self-rotation with overlap: the participant creates a new key, sends a rollover message signed with its current key and with the new key; CrossCentral accepts it without an administrator and publishes both keys with validity periods; the old key is retired after the overlap.** Pros: fully automatic; rides on the registry fetch (AD-15); no certificate authority. Cons: a thief holding the current key could rotate to its own key (detected at the owner's next attempt, see details); CrossCentral must be up at rotation time (retried; keys stay valid long enough). <br> **Option 3: Short-lived certificates issued by CrossCentral: a long-term enrolment key requests a new certificate every few days.** Pros: a leaked operational key dies quickly; revocation by not renewing. Cons: CrossCentral becomes a certificate authority (rejected in AD-03, P-06); renewal needs CrossCentral up, which conflicts with NFR-05 unless lifetimes outlast its outages; the enrolment key is still long-lived. <br> **Option 4: Delegation: the participant's identity key certifies its own short-lived operational keys (AD-25 Option 3).** Pros: no CrossCentral involvement; rotation every few days. Cons: needs AD-25 Option 3; the identity key itself still needs Option 2 for its rare rotation. <br> Details and interaction diagrams: [federation-protocol-options.md](federation-protocol-options.md#ad-26-rotation-of-participant-keys). |
 | Decision | Open; leaning: Option 2. With AD-25 Option 2 the vault's rotation policy creates the new key and the application only announces it. |
 | Justification | Leaning: the only automatic option without a certificate authority and without a central dependency per message (P-06, NFR-05). |
@@ -949,7 +952,7 @@ hold whichever options are chosen are in section 15.2.
 | Status | Draft |
 | Issue or problem statement | CrossCentral's registry-signing key is pinned in every participant at enrolment (AD-03). How is it replaced regularly, and recovered after a compromise, without touching ~70 deployments? (AD-19) |
 | Assumptions | — |
-| Motivation | It is the most valuable key in the federation: whoever holds it can add participants and swap their keys. Stakeholder requirement: automatic rotation, administrators only on problems. |
+| Motivation | It is the most valuable key in the federation: whoever holds it can add participants and swap their keys. Stakeholder requirement (NFR-22): automatic rotation, administrators only on problems. |
 | Options | **Option 1: Manual re-pinning: the new key is configured on every deployment by its administrator.** Pros: simple. Cons: ~70 people; slow; in practice the key is never rotated. <br> **Option 2: Key continuity: the current anchor signs an announcement of its successor; participants switch only to a successor signed by the anchor they trust.** Pros: automatic; little code. Cons: a stolen anchor can announce its own successor too, so recovery from a compromise means re-pinning everywhere. <br> **Option 3: Two tiers (the root pattern of The Update Framework): a root key, pinned at enrolment, only certifies the online registry-signing key and its own successor; the online key signs the registry and is rotated automatically, e.g. monthly. The root is kept apart: in a separate vault usable only by the rotation task (3a), or offline with several administrators and a threshold such as 2 of 3 (3b).** Pros: a lost online key is replaced by the root without re-pinning; routine rotation automatic. Cons: more structure; with 3b, root operations are manual, though rare (years apart, or after a compromise). <br> Details and interaction diagrams: [federation-protocol-options.md](federation-protocol-options.md#ad-27-rotation-of-the-trust-anchor). |
 | Decision | Open; leaning: Option 3, variant 3a. |
 | Justification | Leaning: the anchor is the one key whose theft breaks the whole federation; two tiers make that theft recoverable while keeping rotation automatic (P-03). |
@@ -985,7 +988,7 @@ hold whichever options are chosen are in section 15.2.
 | Status | Draft |
 | Issue or problem statement | A sender keeps every message until it is delivered (AD-14). CrossCentral's outbox is a table written in the same transaction as the state change (AD-07). MemberBase has no relational database; where does its outbox live so that a crash can neither lose a message nor apply it twice? (AD-14, NFR-05) |
 | Assumptions | — |
-| Motivation | Stakeholder requirement: robust against application failure. |
+| Motivation | Stakeholder requirement (NFR-24): robust against application failure. |
 | Options | **Option 1a: Separate outbox entries in the directory, next to the request entries.** Pros: same store and backup; no new component. Cons: directory writes are atomic per entry only, so state and outbox are two writes; a crash between them loses the message unless a repair task finds it. <br> **Option 1b: The pending message is stored as attributes of the request entry itself.** Pros: state and pending message in one write, so both or neither; same store and backup. Cons: request entries get delivery attributes (attempts, next attempt, last error). <br> **Option 2: Azure Storage Queue.** Pros: managed; at-least-once delivery with visibility timeout. Cons: not transactional with the directory either; a new service for the team (NFR-02); personal data in one more store; message size limit (64 KB). <br> **Option 3: Add a relational database to MemberBase.** Pros: real transactions. Cons: a large change to MemberBase's design for one feature; cost (NFR-18). <br> Details and interaction diagrams: [federation-protocol-options.md](federation-protocol-options.md#ad-29-outbox-storage-in-memberbase). |
 | Decision | Open; leaning: Option 1b. To be agreed under MemberBase's rules as well (section 15.1). |
 | Justification | Leaning: one atomic write without a new component (P-06). |
@@ -1003,7 +1006,7 @@ hold whichever options are chosen are in section 15.2.
 | Status | Draft |
 | Issue or problem statement | What sends a message and retries it, so that a request arrives within minutes in a crisis and still arrives after an outage, a slow receiver or a crash of the sender? (NFR-10, AD-14) |
 | Assumptions | — |
-| Motivation | Stakeholder requirement: robust against interrupted communication and slow or failing applications. |
+| Motivation | Stakeholder requirement (NFR-24): robust against interrupted communication and slow or failing applications. |
 | Options | **Option 1: Only the scheduled job sends (e.g. MemberBase's 15-minute job).** Pros: existing pattern; no network calls in web requests. Cons: up to one interval per hop, so a crisis request and its answer can take two intervals (NFR-10). <br> **Option 2: First attempt immediately after the message is stored, in a background thread with a short timeout; the scheduled job retries whatever is still pending, with exponential backoff and jitter, until the request expires.** Pros: seconds when the receiver is up; robust when it is not, because the stored message survives a dead thread or process; no new component. Cons: two triggers for one sending function; a national request to ~70 targets needs the attempts to run in parallel or be left to the job. <br> **Option 3: An always-on worker process per participant.** Pros: fastest retries; fine-grained backoff. Cons: one more container per deployment (NFR-18, P-06). <br> Details and interaction diagrams: [federation-protocol-options.md](federation-protocol-options.md#ad-30-sending-and-retries). |
 | Decision | Open; leaning: Option 2. |
 | Justification | Leaning: meets NFR-10 without a new component (P-06). |
@@ -1021,7 +1024,7 @@ hold whichever options are chosen are in section 15.2.
 | Status | Draft |
 | Issue or problem statement | Retries cover a receiver that is down. They do not cover a message lost on the sender's side, e.g. after a restore to the last backup (NFR-14 allows up to one day). How do two participants notice and repair different views of the same request? (FR-11, NFR-14) |
 | Assumptions | — |
-| Motivation | Stakeholder requirement: robust against application failure, administrators only on problems. |
+| Motivation | Stakeholder requirement (NFR-24): robust against application failure, administrators only on problems. |
 | Options | **Option 1: None; rely on retries.** Pros: least code. Cons: after a restore, parts stay pending until expiry and nobody notices. <br> **Option 2: A `status-query` message: the sender asks the receiver for its view of a request; the receiver answers with the status of each part and sends again any answer part the sender lacks. Triggered by hand and by the restore procedure.** Pros: repairs any loss; small. Cons: needs a person or a procedure to trigger it. <br> **Option 3: Option 2, plus a scheduled check that queries parts of open requests without any change for a set time (e.g. a few hours).** Pros: repairs itself without anyone. Cons: some extra traffic (negligible at NFR-09 volumes). <br> Details and interaction diagrams: [federation-protocol-options.md](federation-protocol-options.md#ad-31-reconciliation-after-lost-messages). |
 | Decision | Open; leaning: Option 3. |
 | Justification | Leaning: the only option that heals a restore without a person (NFR-14, P-03). |
@@ -1057,7 +1060,7 @@ hold whichever options are chosen are in section 15.2.
 | Status | Draft |
 | Issue or problem statement | With retries, messages of one request arrive out of order: a retried status after a later answer part, a cancel before its request. How do participants stay correct? (AD-14, FR-11) |
 | Assumptions | — |
-| Motivation | Stakeholder requirement: robust against interrupted communication. |
+| Motivation | Stakeholder requirement (NFR-24): robust against interrupted communication. |
 | Options | **Option 1: Sequence numbers per request; the receiver holds back messages until the gaps are filled.** Pros: strict order; easy to reason about. Cons: one lost message blocks everything after it; held messages need storage and timeouts. <br> **Option 2: Order-independent processing: each part's state only moves forward (pending, decided, answered, or expired or cancelled); an update that would move it back is ignored; a cancel for an unknown request is kept as a marker, so the request is refused when it arrives.** Pros: nothing blocks; late, repeated and reordered messages are harmless. Cons: every state and transition must be designed this way and tested for every order. <br> Details and interaction diagrams: [federation-protocol-options.md](federation-protocol-options.md#ad-33-order-of-messages). |
 | Decision | Open; leaning: Option 2. |
 | Justification | Leaning: a lost message must not block the rest (FR-11 partial answers). |
@@ -1075,7 +1078,7 @@ hold whichever options are chosen are in section 15.2.
 | Status | Draft |
 | Issue or problem statement | The slowest part of a request is usually a person: an MS Chair who does not see or answer it. How does the solution keep crisis requests moving? (FR-12, FR-24, NFR-10, R-02) |
 | Assumptions | — |
-| Motivation | Stakeholder requirement: robust against lag, which includes people. |
+| Motivation | Stakeholder requirement (NFR-24): robust against lag, which includes people. |
 | Options | **Option 1: Expiry only (as today).** Pros: simple. Cons: crisis parts expire silently. <br> **Option 2: Reminders to the approver at set points, e.g. at a quarter and three quarters of the time to expiry.** Pros: cheap; uses existing email. Cons: email fatigue; still no answer if the person is away. <br> **Option 3: Option 2, plus escalation: for kinds marked urgent (AD-28), a part not decided within a set time can also be decided by the District Coordinator.** Pros: matches the Coordinator fallback in FR-24. Cons: needs a product decision (I-13); two people can then act, so the first decision wins. <br> Details and interaction diagrams: [federation-protocol-options.md](federation-protocol-options.md#ad-34-approvers-who-do-not-act). |
 | Decision | Open; leaning: Option 3 if I-13 allows it, otherwise Option 2. |
 | Justification | Leaning: NFR-10 and R-02 within FR-24's existing roles. |
@@ -1491,6 +1494,9 @@ sequenceDiagram
 | NFR-19 | Must | — | all | AD-16 | P1 to P10 | Yes |
 | NFR-20 | Must | — | C1.7 | AD-07, AD-21 | P7 | Yes |
 | NFR-21 | Not applicable | — | — | — | — | Not applicable |
+| NFR-22 | Should | — | C1.8, C2.1 | AD-19, AD-26, AD-27 | P8 | Partly: ADs Draft |
+| NFR-23 | Must | — | C1.8, C2.2 | AD-24, AD-25 | P8 | Partly: ADs Draft |
+| NFR-24 | Must | — | C1.8, C2.2, C2.3 | AD-29 to AD-34 | P2, P3 | Partly: ADs Draft |
 
 ## 18. RAID log
 
